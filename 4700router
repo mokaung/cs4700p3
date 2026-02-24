@@ -33,6 +33,32 @@ class Router:
     def send(self, network, message):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
+    # turns dotted string describing IP address into int
+    def ip_to_int(self, ip: str) -> int:
+        pass
+
+    # turns int describing IP address into dotted string
+    def int_to_ip(self, n: int) -> str:
+        pass
+
+    # returns how many leading 1 bits the netmask has
+    def mask_len(self, netmask: str) -> int:
+        pass
+
+    # returns true if the ip is in the network defined by network address and netmask
+    def ip_in_ntwrk(self,ip: str,network: str, netmask: str) -> bool:
+        pass
+
+    # returns true if the two networks are adjacent
+    def ntwrk_adjacent(self, n1, mask, n2, mask2) -> bool:
+        pass
+
+    # aggregates two networks into one network
+    def aggregate(self, n1, mask1, n2, mask2) -> tuple:
+        pass
+
+
+
     def run(self):
         while True:
             socks = select.select(self.sockets.values(), [], [], 0.1)[0]
