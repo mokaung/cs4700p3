@@ -19,6 +19,11 @@ class Router:
             self.ports[neighbor] = int(port)
             self.relations[neighbor] = relation
             self.send(neighbor, json.dumps({ "type": "handshake", "src": self.our_addr(neighbor), "dst": neighbor, "msg": {}  }))
+        # route entry contains: network, netmask, peer, localpref, origin, selfOrigin, ASPath
+        self.forwarding_table = []; # list of dicts, each dict is a route entry
+        # the two lists below are used to deaggregate entries by clearing the table and re-adding entries in the order they were received
+        self.update_history = []; # history of all updates to the forwarding table
+        self.withdraw_history = []; # history of all withdrawals from the forwarding table
 
     def our_addr(self, dst):
         quads = list(int(qdn) for qdn in dst.split('.'))
