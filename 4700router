@@ -99,7 +99,7 @@ class Router:
     It then determines if the entry should be forwarded to any other
     neighbors, based on the relationship between the neighbor and the router.
     """
-    def handle_update(self, srcif, msg):
+    def update(self, srcif, msg):
         self.update_history.append({
             "srcif": srcif,
             "msg": msg
@@ -148,7 +148,7 @@ class Router:
     neighbors, based on the relationship between the neighbor and the router.
     If so, it sends the withdrawal to the neighbor.
     """
-    def handle_withdraw(self, srcif, msg):
+    def withdraw(self, srcif, msg):
         self.withdraw_history.append({
             "srcif": srcif,
             "msg": msg
@@ -205,7 +205,7 @@ class Router:
     and selecting the highest scored route.
     Finally, the function sends the data to the best route.
     """
-    def handle_data(self, srcif, msg):
+    def data(self, srcif, msg):
         pot_routes = []
         no_route_msg = {
             "src": self.our_addr(srcif),
@@ -259,7 +259,7 @@ class Router:
             self.send(srcif, json.dumps(no_route_msg))
         
 
-    def handle_dump(self, srcif, msg):
+    def dump(self, srcif, msg):
         pass
 
     def run(self):
@@ -277,13 +277,13 @@ class Router:
                 # stubs for handling router features
                 msg = json.loads(msg_str)
                 if msg["type"] == "update":
-                    self.handle_update(srcif, msg)
+                    self.update(srcif, msg)
                 elif msg["type"] == "withdraw":
-                    self.handle_withdraw(srcif, msg)
+                    self.withdraw(srcif, msg)
                 elif msg["type"] == "data":
-                    self.handle_data(srcif, msg)
+                    self.data(srcif, msg)
                 elif msg["type"] == "dump":
-                    self.handle_dump(srcif, msg)
+                    self.dump(srcif, msg)
         return
 
 if __name__ == "__main__":
