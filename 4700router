@@ -55,9 +55,11 @@ class Router:
     def mask_len(self, netmask: str) -> int:
         mask_bin = self.ip_to_bin(netmask)
         count = 0
-        while mask_bin:
-            count += 1
-            mask_bin= mask_bin >> 1
+        for i in range(31, -1, -1):
+            if mask_bin & (1 << i):
+                count += 1
+            else:
+                break
         return count
 
     # returns true if the ip is in the network defined by network address and netmask
@@ -67,17 +69,18 @@ class Router:
         netmask_bin = self.ip_to_bin(netmask)
         return (ip_bin & netmask_bin) == (ntwrk_bin & netmask_bin)
 
-    # returns true if the two networks are adjacent
+    # returns true if the two networks are adjacent and can be merged
     def is_adjacent(self, ntwrk1, mask1, ntwrk2, mask2) -> bool:
         if self.mask_len(mask1) != self.mask_len(mask2):
             return False
-        mask_len = self.mask_len(mask1)
-        # build network addresses by applying the masks
+        mlen = self.mask_len(mask1)
+        if mlen == 0:
+            return False
         ntwrk_addr_1 = self.ip_to_bin(ntwrk1) & self.ip_to_bin(mask1)
         ntwrk_addr_2 = self.ip_to_bin(ntwrk2) & self.ip_to_bin(mask2)
-        block = 2 ** (32 - mask_len)
-        # check if difference between the two network addresses is equal to block size
-        return abs(ntwrk_addr_1 - ntwrk_addr_2) == block
+        # two networks are aggregable if they share the same parent prefix
+        parent_mask = ((1 << 32) - (1 << (32 - mlen + 1))) & 0xFFFFFFFF
+        return ntwrk_addr_1 != ntwrk_addr_2 and (ntwrk_addr_1 & parent_mask) == (ntwrk_addr_2 & parent_mask)
 
     # aggregates two networks into one network
     def aggregate(self, ntwrk1, mask1, ntwrk2, mask2) -> tuple:
@@ -114,6 +117,7 @@ class Router:
             "selfOrigin": msg["msg"]["selfOrigin"]
         }
         self.forwarding_table.append(entry)
+        self.aggregate_table()
         # determine where the entry should be forwarded
         relation = self.relations[srcif]
         for n in self.sockets:
@@ -170,12 +174,13 @@ class Router:
         # apply withdrawals to forwarding table
         for row in self.withdraw_history:
             withdrawn = row["msg"]["msg"]
+            peer = row["srcif"]
             for w in withdrawn:
-                    new_table = []
-                    for r in self.forwarding_table:
-                        if r["network"] != w["network"] or r["netmask"] != w["netmask"]:
-                            new_table.append(r)
-                    self.forwarding_table = new_table
+                self.forwarding_table = [
+                    r for r in self.forwarding_table
+                    if not (r["network"] == w["network"] and r["netmask"] == w["netmask"] and r["peer"] == peer)
+                ]
+        self.aggregate_table()
         # same send logic as update
         relation = self.relations[srcif]
         for n in self.sockets:
@@ -259,8 +264,55 @@ class Router:
             self.send(srcif, json.dumps(no_route_msg))
         
 
+    """
+    This function handles a dump message from a neighbor.
+    It responds with a table message containing the current
+    forwarding table so the simulator can check for correctness.
+    """
     def dump(self, srcif, msg):
-        pass
+        table_msg = {
+            "src": self.our_addr(srcif),
+            "dst": srcif,
+            "type": "table",
+            "msg": self.forwarding_table
+        }
+        self.send(srcif, json.dumps(table_msg))
+
+    """
+    This function compresses the forwarding table by merging
+    adjacent entries that share the same peer and attributes.
+    It repeatedly scans for mergeable pairs until no more
+    aggregations are possible.
+    """
+    def aggregate_table(self):
+        changed = True
+        while changed:
+            changed = False
+            for i in range(len(self.forwarding_table)):
+                for j in range(i + 1, len(self.forwarding_table)):
+                    a = self.forwarding_table[i]
+                    b = self.forwarding_table[j]
+                    if (a["peer"] == b["peer"] and
+                        a["localpref"] == b["localpref"] and
+                        a["ASPath"] == b["ASPath"] and
+                        a["origin"] == b["origin"] and
+                        a["selfOrigin"] == b["selfOrigin"] and
+                        self.is_adjacent(a["network"], a["netmask"], b["network"], b["netmask"])):
+                        new_net, new_mask = self.aggregate(a["network"], a["netmask"], b["network"], b["netmask"])
+                        self.forwarding_table[i] = {
+                            "network": new_net,
+                            "netmask": new_mask,
+                            "peer": a["peer"],
+                            "localpref": a["localpref"],
+                            "ASPath": a["ASPath"],
+                            "origin": a["origin"],
+                            "selfOrigin": a["selfOrigin"]
+                        }
+                        self.forwarding_table.pop(j)
+                        changed = True
+                        break
+                if changed:
+                    break
 
     def run(self):
         while True:
@@ -274,7 +326,7 @@ class Router:
                         break
                 msg_str = k.decode('utf-8')
                 print("Received message '%s' from %s" % (msg_str, srcif))
-                # stubs for handling router features
+                # parse and dispatch to the appropriate handler
                 msg = json.loads(msg_str)
                 if msg["type"] == "update":
                     self.update(srcif, msg)
