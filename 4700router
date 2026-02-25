@@ -33,31 +33,76 @@ class Router:
     def send(self, network, message):
         self.sockets[network].sendto(message.encode('utf-8'), ('localhost', self.ports[network]))
 
-    # turns dotted string describing IP address into int
-    def ip_to_int(self, ip: str) -> int:
-        pass
+    # turns dotted string describing IP address into binary int
+    def ip_to_bin(self, ip: str) -> int:
+        octets = ip.split('.')
+        A = int(octets[0])
+        B = int(octets[1])
+        C = int(octets[2])
+        D = int(octets[3])
+        return A * 256**3 + B * 256**2 + C * 256**1 + D * 256**0
 
-    # turns int describing IP address into dotted string
-    def int_to_ip(self, n: int) -> str:
-        pass
+    # turns binary int describing IP address into dotted string
+    def bin_to_ip(self, n: int) -> str:
+        n = n & 0xFFFFFFFF
+        A = (n >> 24) & 0xFF
+        B = (n >> 16) & 0xFF
+        C = (n >> 8) & 0xFF
+        D = n & 0xFF
+        return "%d.%d.%d.%d" % (A, B, C, D)
 
     # returns how many leading 1 bits the netmask has
     def mask_len(self, netmask: str) -> int:
-        pass
+        mask_bin = self.ip_to_bin(netmask)
+        count = 0
+        while mask_bin:
+            count += 1
+            mask_bin= mask_bin >> 1
+        return count
 
     # returns true if the ip is in the network defined by network address and netmask
-    def ip_in_ntwrk(self,ip: str,network: str, netmask: str) -> bool:
-        pass
+    def is_in_ntwrk(self, ip: str, ntwrk: str, netmask: str) -> bool:
+        ip_bin = self.ip_to_bin(ip)
+        ntwrk_bin = self.ip_to_bin(ntwrk)
+        netmask_bin = self.ip_to_bin(netmask)
+        return (ip_bin & netmask_bin) == (ntwrk_bin & netmask_bin)
 
     # returns true if the two networks are adjacent
-    def ntwrk_adjacent(self, n1, mask, n2, mask2) -> bool:
-        pass
+    def is_adjacent(self, ntwrk1, mask1, ntwrk2, mask2) -> bool:
+        if self.mask_len(mask1) != self.mask_len(mask2):
+            return False
+        mask_len = self.mask_len(mask1)
+        # build network addresses by applying the masks
+        ntwrk_addr_1 = self.ip_to_bin(ntwrk1) & self.ip_to_bin(mask1)
+        ntwrk_addr_2 = self.ip_to_bin(ntwrk2) & self.ip_to_bin(mask2)
+        block = 2 ** (32 - mask_len)
+        # check if difference between the two network addresses is equal to block size
+        return abs(ntwrk_addr_1 - ntwrk_addr_2) == block
 
     # aggregates two networks into one network
-    def aggregate(self, n1, mask1, n2, mask2) -> tuple:
+    def aggregate(self, ntwrk1, mask1, ntwrk2, mask2) -> tuple:
+        mask_len = self.mask_len(mask1)
+        mask_len_new = mask_len - 1
+        mask1_bin = self.ip_to_bin(mask1)
+        # build network addresses by applying the masks
+        ntwrk_addr_1 = self.ip_to_bin(ntwrk1) & mask1_bin
+        ntwrk_addr_2 = self.ip_to_bin(ntwrk2) & self.ip_to_bin(mask2)
+        aggregated_ntwrk_addr = min(ntwrk_addr_1, ntwrk_addr_2)
+        # build new mask by subtracting 1 from og mask length
+        new_mask_int = ((1 << 32) - (1 << (32 - mask_len_new))) & 0xFFFFFFFF
+        return (self.bin_to_ip(aggregated_ntwrk_addr), self.bin_to_ip(new_mask_int))
+
+    def handle_update(self, srcif, msg):
         pass
 
+    def handle_withdraw(self, srcif, msg):
+        pass
 
+    def handle_data(self, srcif, msg):
+        pass
+
+    def handle_dump(self, srcif, msg):
+        pass
 
     def run(self):
         while True:
@@ -69,9 +114,18 @@ class Router:
                     if self.sockets[sock] == conn:
                         srcif = sock
                         break
-                msg = k.decode('utf-8')
-
-                print("Received message '%s' from %s" % (msg, srcif))
+                msg_str = k.decode('utf-8')
+                print("Received message '%s' from %s" % (msg_str, srcif))
+                # stubs for handling router features
+                msg = json.loads(msg_str)
+                if msg["type"] == "update":
+                    self.handle_update(srcif, msg)
+                elif msg["type"] == "withdraw":
+                    self.handle_withdraw(srcif, msg)
+                elif msg["type"] == "data":
+                    self.handle_data(srcif, msg)
+                elif msg["type"] == "dump":
+                    self.handle_dump(srcif, msg)
         return
 
 if __name__ == "__main__":
