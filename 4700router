@@ -92,14 +92,172 @@ class Router:
         new_mask_int = ((1 << 32) - (1 << (32 - mask_len_new))) & 0xFFFFFFFF
         return (self.bin_to_ip(aggregated_ntwrk_addr), self.bin_to_ip(new_mask_int))
 
+    """
+    This function handles an update message from a neightbor.
+    It first appends the update to the update history,
+    then constructs a route entry from the update message.
+    It then determines if the entry should be forwarded to any other
+    neighbors, based on the relationship between the neighbor and the router.
+    """
     def handle_update(self, srcif, msg):
-        pass
+        self.update_history.append({
+            "srcif": srcif,
+            "msg": msg
+        })
+        entry = {
+            "network": msg["msg"]["network"],
+            "netmask": msg["msg"]["netmask"],
+            "peer": srcif,
+            "localpref": msg["msg"]["localpref"],
+            "ASPath": msg["msg"]["ASPath"],
+            "origin": msg["msg"]["origin"],
+            "selfOrigin": msg["msg"]["selfOrigin"]
+        }
+        self.forwarding_table.append(entry)
+        # determine where the entry should be forwarded
+        relation = self.relations[srcif]
+        for n in self.sockets:
+            if n == srcif:
+                continue
+            # customer
+            if relation == "cust":
+                should_send = True
+            # peer or provider
+            else:
+                should_send = (self.relations[n] == "cust")
+            if should_send:
+                fwd_msg = {
+                    "src": self.our_addr(n),
+                    "dst": n,
+                    "type": "update",
+                    "msg": {
+                        "network": msg["msg"]["network"],
+                        "netmask": msg["msg"]["netmask"],
+                        "ASPath": [self.asn] + msg["msg"]["ASPath"]
+                    }
+                }
+                self.send(n, json.dumps(fwd_msg))
 
+
+    """
+    This function handles a withdrawal message from a neighbor.
+    It first appends the withdrawal to the withdrawal history,
+    then rebuilds the forwarding table using the update history,
+    then applies the withdrawals to the forwarding table,
+    then determines if the withdrawal should be forwarded to any other
+    neighbors, based on the relationship between the neighbor and the router.
+    If so, it sends the withdrawal to the neighbor.
+    """
     def handle_withdraw(self, srcif, msg):
-        pass
+        self.withdraw_history.append({
+            "srcif": srcif,
+            "msg": msg
+        })
+        # rebuild forwarding table using update history
+        self.forwarding_table.clear()
+        for row in self.update_history:
+            m = row["msg"]
+            if m["type"] == "update":
+                self.forwarding_table.append({
+                    "network": m["msg"]["network"],
+                    "netmask": m["msg"]["netmask"],
+                    "peer": row["srcif"],
+                    "localpref": m["msg"]["localpref"],
+                    "ASPath": m["msg"]["ASPath"],
+                    "origin": m["msg"]["origin"],
+                    "selfOrigin": m["msg"]["selfOrigin"]
+                })
+        # apply withdrawals to forwarding table
+        for row in self.withdraw_history:
+            withdrawn = row["msg"]["msg"]
+            for w in withdrawn:
+                    new_table = []
+                    for r in self.forwarding_table:
+                        if r["network"] != w["network"] or r["netmask"] != w["netmask"]:
+                            new_table.append(r)
+                    self.forwarding_table = new_table
+        # same send logic as update
+        relation = self.relations[srcif]
+        for n in self.sockets:
+            if n == srcif:
+                continue
+            # customer
+            if relation == "cust":
+                should_send = True
+            # peer or provider
+            else:
+                should_send = (self.relations[n] == "cust")
+            if should_send:
+                fwd_msg = {
+                    "src": self.our_addr(n),
+                    "dst": n,
+                    "type": "withdraw",
+                    "msg": msg["msg"]
+                }
+                self.send(n, json.dumps(fwd_msg))
 
+
+    """
+    This function handles a data message from a neighbor.
+    It first checks if the destination is in any of the routes in the forwarding table.
+    If it is, it then uses given tiebreaker rules to select the best route.
+    The function does this by scoring each route based on the tiebreaker rules
+    and selecting the highest scored route.
+    Finally, the function sends the data to the best route.
+    """
     def handle_data(self, srcif, msg):
-        pass
+        pot_routes = []
+        no_route_msg = {
+            "src": self.our_addr(srcif),
+            "dst": msg["src"],
+            "type": "no route",
+            "msg": {}
+        }
+        for e in self.forwarding_table:
+            if self.is_in_ntwrk(msg["dst"], e["network"], e["netmask"]):
+                pot_routes.append(e)
+        # if no potential routes, send no route message
+        if not pot_routes:
+            self.send(srcif, json.dumps(no_route_msg))
+            return
+        # strip potential routes to the one best route based on given tiebreaker rules
+        origin_ranks = {"IGP": 3, "EGP": 2, "UNK": 1}
+        best_route = None
+        # score takes in all tiebreaker rules and rates a given route
+        best_score = None
+
+        for r in pot_routes:
+            # longer prefix length is better
+            p_len = self.mask_len(r["netmask"])
+            # higher localpref is better
+            localpref = r["localpref"]
+            # self-originated routes are better
+            self_origin_score = 1 if r["selfOrigin"] else 0
+            # shorter AS path is better
+            aspath_len = len(r["ASPath"])
+            # higher rank is better
+            origin_score = origin_ranks[r["origin"]]
+            # lower peer IP is better
+            peer_ip_score = -self.ip_to_bin(r["peer"])
+
+            score = (
+                p_len,
+                localpref,
+                self_origin_score,
+                -aspath_len,
+                origin_score,
+                peer_ip_score,
+            )
+
+            if best_route is None or score > best_score:
+                best_route = r
+                best_score = score
+
+        if self.relations[srcif] == "cust" or self.relations[best_route["peer"]] == "cust":
+            self.send(best_route["peer"], json.dumps(msg))
+        else:
+            self.send(srcif, json.dumps(no_route_msg))
+        
 
     def handle_dump(self, srcif, msg):
         pass
